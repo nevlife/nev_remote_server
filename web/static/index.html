@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>NEV Server</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<header id="topbar">
+  <span id="title">NEV SERVER</span>
+  <div id="badges">
+    <span class="badge" id="badge-ws">WS</span>
+    <span class="badge" id="badge-veh">VEH</span>
+    <span class="badge" id="badge-stas">STAS</span>
+    <span class="badge" id="badge-joy">JOY</span>
+    <span class="badge" id="badge-rem">REM</span>
+    <span id="rtt-disp">RTT --</span>
+    <span id="clock">--:--:--</span>
+  </div>
+</header>
+
+<div id="cmdbar">
+  <div id="mode-group">
+    <span class="label">MODE</span>
+    <button class="mode-btn" data-mode="-1">IDLE</button>
+    <button class="mode-btn" data-mode="0">CTRL</button>
+    <button class="mode-btn" data-mode="1">NAV</button>
+    <button class="mode-btn" data-mode="2">REMOTE</button>
+  </div>
+  <button id="estop-btn">&#9632; E-STOP</button>
+</div>
+
+<div id="main">
+
+  <div id="video-panel">
+    <video id="video" autoplay playsinline muted
+      style="width:100%;height:100%;object-fit:contain;background:#000;display:none">
+    </video>
+    <div id="video-placeholder">
+      <span class="ns-text" id="video-status">NO SIGNAL</span>
+    </div>
+  </div>
+
+  <aside id="side-panel">
+
+    <section class="card" id="card-hunter">
+      <div class="card-title">HUNTER</div>
+      <div id="hunter-body"></div>
+    </section>
+
+    <section class="card" id="card-mux">
+      <div class="card-title">MUX</div>
+      <div id="mux-body"></div>
+    </section>
+
+    <section class="card" id="card-network">
+      <div class="card-title">NETWORK</div>
+      <div id="network-body"></div>
+    </section>
+
+    <section class="card" id="card-twist">
+      <div class="card-title">TWIST</div>
+      <div id="twist-body"></div>
+    </section>
+
+    <section class="card" id="card-estop">
+      <div class="card-title">E-STOP</div>
+      <div id="estop-body"></div>
+    </section>
+
+    <section class="card" id="card-joy">
+      <div class="card-title">JOYSTICK</div>
+      <div id="joy-body"></div>
+    </section>
+
+    <section class="card" id="card-res">
+      <div class="card-title">RESOURCES</div>
+      <div id="res-body"></div>
+    </section>
+
+    <section class="card" id="card-netifaces">
+      <div class="card-title">NET INTERFACES</div>
+      <div id="netifaces-body"></div>
+    </section>
+
+    <section class="card" id="card-disk">
+      <div class="card-title">DISK</div>
+      <div id="disk-body"></div>
+    </section>
+
+    <section class="card" id="card-alerts">
+      <div class="card-title">ALERTS</div>
+      <div id="alerts-body"><span class="muted">—</span></div>
+    </section>
+
+  </aside>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

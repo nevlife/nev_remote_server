@@ -1,0 +1,17 @@
+# NEV Remote Server configuration
+
+# ── Zenoh ────────────────────────────────────────────────
+# 차량과 스테이션이 연결하는 Zenoh 라우터 엔드포인트
+# 로컬 테스트: tcp/127.0.0.1:7447
+# 운용 시:    tcp/0.0.0.0:7447  (zenohd 가 이 포트를 listen)
+zenoh_locator: "tcp/127.0.0.1:7447"
+
+# ── Web server ───────────────────────────────────────────
+web_port: 8080
+
+# ── Send rates ───────────────────────────────────────────
+heartbeat_rate:       5.0    # Hz — 서버 → 차량 heartbeat
+state_push_interval:  0.5    # sec — 브라우저 UI 주기적 갱신
+
+# ── Station watchdog ─────────────────────────────────────
+station_timeout:      2.0    # sec — 스테이션 heartbeat 타임아웃

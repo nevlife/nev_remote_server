@@ -1,0 +1,17 @@
+{
+  // 이 파일은 main.py 가 config.yaml 의 zenoh_locator 포트로 자동 생성합니다.
+  // 직접 수정하지 말고 config.yaml 의 zenoh_locator 포트 번호만 바꾸세요.
+  //
+  // 실행 방법: zenohd --config zenohd.json5
+
+  listen: {
+    endpoints: ["tcp/0.0.0.0:7447"],
+  },
+
+  scouting: {
+    multicast: {
+      // WAN 환경에서는 멀티캐스트 비활성화
+      enabled: false,
+    },
+  },
+}
