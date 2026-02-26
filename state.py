@@ -4,6 +4,9 @@ import dataclasses
 from dataclasses import dataclass, field
 from typing import List
 
+# 차량 연결 판단에 쓰이는 핵심 제어 데이터 키
+_CONTROL_KEYS = frozenset({'mux', 'twist', 'network', 'hunter', 'estop'})
+
 @dataclass
 class MuxStatus:
     requested_mode: int = -1      # -1:idle 0:ctrl 1:nav 2:remote
@@ -92,7 +95,8 @@ class SharedState:
         self.control   = ControlState()
         self.alerts: List[Alert] = []
 
-        self.last_vehicle_recv: float = 0.0
+        self.last_vehicle_recv: float = 0.0   # 모든 차량 데이터 (연결 모니터링)
+        self.last_control_recv: float = 0.0   # 핵심 제어 데이터만 (mux/twist/hunter/estop)
 
         # 스테이션 연결 상태
         self.station_connected: bool  = False
@@ -111,9 +115,10 @@ class SharedState:
         for k, v in data.items():
             if hasattr(obj, k):
                 setattr(obj, k, v)
-        self.last_vehicle_recv = time.monotonic()
-        self._validate()
-        self._broadcast_sync()
+        now = time.monotonic()
+        self.last_vehicle_recv = now
+        if key in _CONTROL_KEYS:
+            self.last_control_recv = now
 
     def _upsert_list(self, lst: list, idx: int, data: dict):
         if idx >= len(lst):
@@ -123,31 +128,25 @@ class SharedState:
     def update_gpu(self, idx: int, data: dict):
         self._upsert_list(self.gpu_list, idx, data)
         self.last_vehicle_recv = time.monotonic()
-        self._broadcast_sync()
 
     def update_disk_partition(self, idx: int, data: dict):
         self._upsert_list(self.disk_partitions, idx, data)
         self.last_vehicle_recv = time.monotonic()
-        self._broadcast_sync()
 
     def update_net_interface(self, idx: int, data: dict):
         self._upsert_list(self.net_interfaces, idx, data)
         self.last_vehicle_recv = time.monotonic()
-        self._broadcast_sync()
 
     def update_remote_enabled(self, val: bool):
         self.remote_enabled = val
-        self._broadcast_sync()
 
     def update_station_connected(self, val: bool):
         if self.station_connected != val:
             self.station_connected = val
-            self._broadcast_sync()
 
     def update_joystick_connected(self, val: bool):
         if self.control.joystick_connected != val:
             self.control.joystick_connected = val
-            self._broadcast_sync()
 
     def _validate(self):
         alerts: List[Alert] = []
@@ -165,8 +164,8 @@ class SharedState:
                 and not self.mux.teleop_active):
             alerts.append(Alert('warn', 'Remote mode active but no teleop commands received'))
 
-        if self.last_vehicle_recv > 0:
-            age = time.monotonic() - self.last_vehicle_recv
+        if self.last_control_recv > 0:
+            age = time.monotonic() - self.last_control_recv
             if age > 3.0:
                 alerts.append(Alert('error', f'No vehicle data for {age:.1f}s'))
 
@@ -211,6 +210,6 @@ class SharedState:
             'station_connected': self.station_connected,
             'alerts':            [_d(a) for a in self.alerts],
             'server_time':       time.time(),
-            'vehicle_age':       (time.monotonic() - self.last_vehicle_recv)
-                                 if self.last_vehicle_recv > 0 else -1,
+            'vehicle_age':       (time.monotonic() - self.last_control_recv)
+                                 if self.last_control_recv > 0 else -1,
         })

@@ -47,11 +47,12 @@ class StationBridge:
     # ── Zenoh callbacks (zenoh background thread) ─────────────────────────────
 
     def _on_heartbeat(self, sample):
+        self._loop.call_soon_threadsafe(self._recv_heartbeat)
+
+    def _recv_heartbeat(self):
         self._state.station_last_recv = time.monotonic()
         if not self._state.station_connected:
-            self._loop.call_soon_threadsafe(
-                self._state.update_station_connected, True
-            )
+            self._state.update_station_connected(True)
 
     def _on_teleop(self, sample):
         try:
@@ -102,8 +103,6 @@ class StationBridge:
 
     def _update_estop(self, active: bool):
         self._state.control.estop = active
-        self._state._broadcast_sync()
 
     def _update_mode(self, mode: int):
         self._state.control.mode = mode
-        self._state._broadcast_sync()

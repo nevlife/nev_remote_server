@@ -14,6 +14,7 @@ from state import SharedState
 from vehicle_bridge import VehicleProtocol, run_send_loop
 from station_bridge import StationBridge
 from web.server import create_app
+from web import video_relay
 
 logging.basicConfig(
     level=logging.INFO,
@@ -103,6 +104,7 @@ async def run(cfg: dict):
             server.serve(),
         )
     finally:
+        await video_relay.cleanup()
         station_bridge.stop()
         vehicle_proto.stop()
         session.close()

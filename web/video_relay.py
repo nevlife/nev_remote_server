@@ -40,6 +40,9 @@ class FrameBuffer:
 
 # ── aiortc video track ────────────────────────────────────────────────────────
 
+_BLANK_RGB = np.zeros((480, 640, 3), dtype=np.uint8)
+
+
 class CameraVideoTrack(VideoStreamTrack):
     """Pulls JPEG frames from FrameBuffer and delivers them as WebRTC video."""
 
@@ -48,29 +51,37 @@ class CameraVideoTrack(VideoStreamTrack):
     def __init__(self, buffer: FrameBuffer):
         super().__init__()
         self._buffer = buffer
+        self._last_jpeg: bytes | None = None
+        self._last_rgb:  np.ndarray | None = None
 
     async def recv(self) -> av.VideoFrame:
         pts, time_base = await self.next_timestamp()
 
         jpeg = self._buffer.get_latest()
-        frame = self._decode_jpeg(jpeg)
+        rgb  = self._get_rgb(jpeg)
 
+        # av.VideoFrame은 매번 새로 생성 (pts 공유 방지)
+        frame = av.VideoFrame.from_ndarray(rgb, format="rgb24")
         frame.pts = pts
         frame.time_base = time_base
         return frame
 
-    def _decode_jpeg(self, jpeg: bytes | None) -> av.VideoFrame:
-        if jpeg is not None:
-            arr = np.frombuffer(jpeg, dtype=np.uint8)
-            bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-            if bgr is not None:
-                rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-                return av.VideoFrame.from_ndarray(rgb, format="rgb24")
+    def _get_rgb(self, jpeg: bytes | None) -> np.ndarray:
+        if jpeg is None:
+            return _BLANK_RGB
 
-        # 매번 새 프레임 생성 — 여러 트랙이 pts를 공유 객체에 덮어쓰면 인코더 오류 발생
-        return av.VideoFrame.from_ndarray(
-            np.zeros((480, 640, 3), dtype=np.uint8), format="rgb24"
-        )
+        # 같은 JPEG 객체면 디코딩 생략
+        if jpeg is self._last_jpeg and self._last_rgb is not None:
+            return self._last_rgb
+
+        arr = np.frombuffer(jpeg, dtype=np.uint8)
+        bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        if bgr is not None:
+            self._last_rgb  = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+            self._last_jpeg = jpeg
+            return self._last_rgb
+
+        return _BLANK_RGB
 
 
 # ── Module-level state ────────────────────────────────────────────────────────

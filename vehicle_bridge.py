@@ -48,6 +48,7 @@ class VehicleProtocol:
             session.declare_subscriber('nev/vehicle/disk',    self._on_disk),
             session.declare_subscriber('nev/vehicle/net',     self._on_net),
             session.declare_subscriber('nev/vehicle/camera',  self._on_camera),
+            session.declare_subscriber('nev/vehicle/hb_ack',  self._on_hb_ack),
         ]
         logger.info('VehicleProtocol started')
 
@@ -114,7 +115,6 @@ class VehicleProtocol:
     def _on_disk(self, sample):
         data = json.loads(bytes(sample.payload))
         def _update():
-            self.state.last_vehicle_recv = time.monotonic()
             for p in data.get('partitions', []):
                 self.state.update_disk_partition(p['idx'], {
                     'mountpoint':  p['mountpoint'],
@@ -128,6 +128,15 @@ class VehicleProtocol:
     def _on_camera(self, sample):
         jpeg = bytes(sample.payload)
         self._loop.call_soon_threadsafe(video_relay.frame_buffer.update, jpeg)
+
+    def _on_hb_ack(self, sample):
+        data = json.loads(bytes(sample.payload))
+        ts = data.get('ts', 0.0)
+        if ts > 0:
+            rtt_ms = max(0.0, (time.time() - ts) * 1000.0)
+            def _update():
+                self.state.network.rtt_ms = rtt_ms
+            self._call_fn(_update)
 
     def _on_net(self, sample):
         data = json.loads(bytes(sample.payload))
@@ -187,7 +196,7 @@ async def run_send_loop(state: SharedState, proto: VehicleProtocol, cfg: dict):
     - state broadcast: UI WebSocket 클라이언트에 주기적 푸시
     """
     hb_interval        = 1.0 / cfg.get('heartbeat_rate',   5.0)
-    push_interval      = cfg.get('state_push_interval', 0.5)
+    push_interval      = cfg.get('state_push_interval', 0.05)  # 20 Hz
     station_timeout    = cfg.get('station_timeout', 2.0)
     disconnect_timeout = 3.0
 
