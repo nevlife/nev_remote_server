@@ -6,7 +6,7 @@ import time
 import zenoh
 
 from state import SharedState
-from web import video_relay
+from web.video_relay import video_relay
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +26,9 @@ class VehicleProtocol:
         self._pubs:  dict = {}
         self._subs:  list = []
         self._seq    = 0
+        self._cam_bytes  = 0
+        self._tele_bytes = 0
+        self._bw_ts      = time.time()
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -68,39 +71,52 @@ class VehicleProtocol:
 
     # ── Vehicle → server subscribers ──────────────────────────────────────────
 
+    def _count_tele(self, n: int):
+        self._tele_bytes += n
+
     def _on_mux(self, sample):
-        data = json.loads(bytes(sample.payload))
+        raw = bytes(sample.payload)
+        self._tele_bytes += len(raw)
+        data = json.loads(raw)
         def _update():
             self.state.update_packet('mux', data)
             self.state.update_remote_enabled(data.get('remote_enabled', False))
         self._call_fn(_update)
 
     def _on_twist(self, sample):
-        data = json.loads(bytes(sample.payload))
-        self._call(self.state.update_packet, 'twist', data)
+        raw = bytes(sample.payload)
+        self._tele_bytes += len(raw)
+        self._call(self.state.update_packet, 'twist', json.loads(raw))
 
     def _on_network(self, sample):
-        data = json.loads(bytes(sample.payload))
-        self._call(self.state.update_packet, 'network', data)
+        raw = bytes(sample.payload)
+        self._tele_bytes += len(raw)
+        self._call(self.state.update_packet, 'network', json.loads(raw))
 
     def _on_hunter(self, sample):
-        data = json.loads(bytes(sample.payload))
-        self._call(self.state.update_packet, 'hunter', data)
+        raw = bytes(sample.payload)
+        self._tele_bytes += len(raw)
+        self._call(self.state.update_packet, 'hunter', json.loads(raw))
 
     def _on_estop(self, sample):
-        data = json.loads(bytes(sample.payload))
-        self._call(self.state.update_packet, 'estop', data)
+        raw = bytes(sample.payload)
+        self._tele_bytes += len(raw)
+        self._call(self.state.update_packet, 'estop', json.loads(raw))
 
     def _on_cpu(self, sample):
-        data = json.loads(bytes(sample.payload))
-        self._call(self.state.update_packet, 'resources', data)
+        raw = bytes(sample.payload)
+        self._tele_bytes += len(raw)
+        self._call(self.state.update_packet, 'resources', json.loads(raw))
 
     def _on_mem(self, sample):
-        data = json.loads(bytes(sample.payload))
-        self._call(self.state.update_packet, 'resources', data)
+        raw = bytes(sample.payload)
+        self._tele_bytes += len(raw)
+        self._call(self.state.update_packet, 'resources', json.loads(raw))
 
     def _on_gpu(self, sample):
-        gpus = json.loads(bytes(sample.payload))
+        raw = bytes(sample.payload)
+        self._tele_bytes += len(raw)
+        gpus = json.loads(raw)
         def _update():
             for g in gpus:
                 self.state.update_gpu(g['idx'], {
@@ -113,7 +129,9 @@ class VehicleProtocol:
         self._call_fn(_update)
 
     def _on_disk(self, sample):
-        data = json.loads(bytes(sample.payload))
+        raw = bytes(sample.payload)
+        self._tele_bytes += len(raw)
+        data = json.loads(raw)
         def _update():
             for p in data.get('partitions', []):
                 self.state.update_disk_partition(p['idx'], {
@@ -126,11 +144,17 @@ class VehicleProtocol:
         self._call_fn(_update)
 
     def _on_camera(self, sample):
-        jpeg = bytes(sample.payload)
-        self._loop.call_soon_threadsafe(video_relay.frame_buffer.update, jpeg)
+        # H.265 NAL 유닛을 수신하여 video_relay로 전달 (서버에서 디코딩)
+        h265_data = bytes(sample.payload)
+        self._cam_bytes += len(h265_data)
+        asyncio.run_coroutine_threadsafe(
+            video_relay.broadcast_async(h265_data), self._loop
+        )
 
     def _on_hb_ack(self, sample):
-        data = json.loads(bytes(sample.payload))
+        raw = bytes(sample.payload)
+        self._tele_bytes += len(raw)
+        data = json.loads(raw)
         ts = data.get('ts', 0.0)
         if ts > 0:
             rtt_ms = max(0.0, (time.time() - ts) * 1000.0)
@@ -139,7 +163,9 @@ class VehicleProtocol:
             self._call_fn(_update)
 
     def _on_net(self, sample):
-        data = json.loads(bytes(sample.payload))
+        raw = bytes(sample.payload)
+        self._tele_bytes += len(raw)
+        data = json.loads(raw)
         def _update():
             self.state.update_packet('resources', {
                 'net_total_ifaces':  data['net_total_ifaces'],
@@ -155,6 +181,20 @@ class VehicleProtocol:
                     'out_bps':    iface['out_bps'],
                 })
         self._call_fn(_update)
+
+    def calc_bandwidth(self):
+        now = time.time()
+        dt  = now - self._bw_ts
+        if dt >= 1.0:
+            cam_mbps  = round(self._cam_bytes  * 8 / (dt * 1e6), 3)
+            tele_mbps = round(self._tele_bytes * 8 / (dt * 1e6), 3)
+            self._cam_bytes  = 0
+            self._tele_bytes = 0
+            self._bw_ts      = now
+            def _update():
+                self.state.network.bw_camera_mbps    = cam_mbps
+                self.state.network.bw_telemetry_mbps = tele_mbps
+            self._call_fn(_update)
 
     # ── Server → vehicle publishers ───────────────────────────────────────────
 
@@ -222,6 +262,9 @@ async def run_send_loop(state: SharedState, proto: VehicleProtocol, cfg: dict):
             if now - state.station_last_recv > station_timeout:
                 logger.warning('Station heartbeat timeout — marking disconnected')
                 state.update_station_connected(False)
+
+        # 대역폭 계산 (1초 주기)
+        proto.calc_bandwidth()
 
         # 차량에 heartbeat 전송 (서버 책임)
         if now - last_hb >= hb_interval:

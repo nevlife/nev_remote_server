@@ -54,6 +54,7 @@ class CommandCenter {
     this._startVideo();
   }
 
+
   // ── WebSocket ──────────────────────────────────────
 
   _connect() {
@@ -194,7 +195,8 @@ class CommandCenter {
       kv('status', dot(ns.connected, ns.connected ? 'green' : 'red') +
                    (NS_CODES[ns.status_code] ?? ns.status_code), stCls) +
       kv('rtt',    `${ns.rtt_ms.toFixed(1)} ms`, rttCls) +
-      kv('bw',     ns.bandwidth_mbps > 0 ? `${ns.bandwidth_mbps.toFixed(2)} Mbps` : '—');
+      kv('bw cam', ns.bw_camera_mbps    > 0 ? `${ns.bw_camera_mbps.toFixed(2)} Mbps`    : '—') +
+      kv('bw tele', ns.bw_telemetry_mbps > 0 ? `${ns.bw_telemetry_mbps.toFixed(2)} Mbps` : '—');
   }
 
   // ── Twist ─────────────────────────────────────────
@@ -337,75 +339,60 @@ class CommandCenter {
       .join('');
   }
 
-  // ── WebRTC video ───────────────────────────────────
+  // ── H.265 → 서버 디코딩 → WebRTC → <video> ──────
 
-  async _startVideo() {
+  _startVideo() {
     clearTimeout(this._videoRetryTimer);
 
-    const videoEl  = $('video');
-    const statusEl = $('video-status');
-
+    // 기존 PeerConnection 정리
     if (this._pc) {
+      this._pc.onconnectionstatechange = null;
       this._pc.close();
       this._pc = null;
     }
 
-    const _retry = (msg) => {
-      if (statusEl) statusEl.textContent = msg;
-      this._videoRetryTimer = setTimeout(() => this._startVideo(), 5000);
+    const videoEl  = $('video-el');
+    const statusEl = $('video-status');
+
+    const pc = new RTCPeerConnection({
+      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+    });
+    this._pc = pc;
+
+    pc.ontrack = (event) => {
+      videoEl.srcObject = event.streams[0];
+      videoEl.style.display = 'block';
+      $('video-placeholder').style.display = 'none';
+      statusEl.textContent = 'LIVE';
     };
 
-    try {
-      const pc = new RTCPeerConnection({
-        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
-      });
-      this._pc = pc;
+    pc.onconnectionstatechange = () => {
+      console.log('[WebRTC]', pc.connectionState);
+      if (['failed', 'closed', 'disconnected'].includes(pc.connectionState)) {
+        videoEl.style.display = 'none';
+        $('video-placeholder').style.display = '';
+        statusEl.textContent = `VIDEO ${pc.connectionState.toUpperCase()}`;
+        this._videoRetryTimer = setTimeout(() => this._startVideo(), 3000);
+      }
+    };
 
-      pc.ontrack = (ev) => {
-        if (ev.streams && ev.streams[0]) {
-          videoEl.srcObject = ev.streams[0];
-          videoEl.style.display = 'block';
-          if ($('video-placeholder')) $('video-placeholder').style.display = 'none';
-        }
-      };
+    // 수신 전용 비디오 트랜시버 추가
+    pc.addTransceiver('video', { direction: 'recvonly' });
 
-      pc.onconnectionstatechange = () => {
-        if (['failed', 'closed', 'disconnected'].includes(pc.connectionState)) {
-          videoEl.style.display = 'none';
-          if ($('video-placeholder')) $('video-placeholder').style.display = '';
-          _retry(`VIDEO ${pc.connectionState.toUpperCase()}`);
-        }
-      };
-
-      pc.addTransceiver('video', { direction: 'recvonly' });
-
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-
-      await new Promise(resolve => {
-        if (pc.iceGatheringState === 'complete') { resolve(); return; }
-        const onState = () => { if (pc.iceGatheringState === 'complete') resolve(); };
-        pc.addEventListener('icegatheringstatechange', onState);
-        setTimeout(resolve, 3000);
-      });
-
-      const resp = await fetch('/api/webrtc/offer', {
-        method: 'POST',
+    pc.createOffer()
+      .then(offer => pc.setLocalDescription(offer))
+      .then(() => fetch('/api/webrtc/offer', {
+        method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sdp: pc.localDescription.sdp, type: pc.localDescription.type }),
+        body:    JSON.stringify({ sdp: pc.localDescription.sdp, type: pc.localDescription.type }),
+      }))
+      .then(r => r.json())
+      .then(answer => pc.setRemoteDescription(new RTCSessionDescription(answer)))
+      .catch(err => {
+        console.error('[WebRTC] offer 실패:', err);
+        statusEl.textContent = 'VIDEO ERROR';
+        this._videoRetryTimer = setTimeout(() => this._startVideo(), 3000);
       });
-
-      if (!resp.ok) { _retry('VIDEO ERR (offer)'); return; }
-
-      const answer = await resp.json();
-      await pc.setRemoteDescription(answer);
-
-      if (statusEl) statusEl.textContent = 'CONNECTING…';
-
-    } catch (e) {
-      console.error('WebRTC error:', e);
-      _retry('VIDEO ERR');
-    }
   }
 
   // ── Clock ─────────────────────────────────────────

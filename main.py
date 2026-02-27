@@ -13,8 +13,8 @@ import zenoh
 from state import SharedState
 from vehicle_bridge import VehicleProtocol, run_send_loop
 from station_bridge import StationBridge
-from web.server import create_app
-from web import video_relay
+from web.server import create_app, shutdown_webrtc
+from web.video_relay import video_relay
 
 logging.basicConfig(
     level=logging.INFO,
@@ -72,6 +72,9 @@ async def run(cfg: dict):
     state = SharedState()
     loop  = asyncio.get_running_loop()
 
+    # H.265 디코더 + executor 초기화
+    video_relay.init(loop)
+
     # Zenoh 세션 생성 (차량 + 스테이션 공용 라우터에 연결)
     zconf = zenoh.Config()
     if locator:
@@ -105,6 +108,7 @@ async def run(cfg: dict):
         )
     finally:
         await video_relay.cleanup()
+        await shutdown_webrtc()
         station_bridge.stop()
         vehicle_proto.stop()
         session.close()

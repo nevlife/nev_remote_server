@@ -29,10 +29,11 @@ class TwistValues:
 
 @dataclass
 class NetworkStatus:
-    connected:      bool  = False
-    status_code:    int   = 2     # 0:ok 1:hb_delay 2:socket_err
-    rtt_ms:         float = 0.0
-    bandwidth_mbps: float = 0.0
+    connected:         bool  = False
+    status_code:       int   = 2     # 0:ok 1:hb_delay 2:socket_err
+    rtt_ms:            float = 0.0
+    bw_camera_mbps:    float = 0.0
+    bw_telemetry_mbps: float = 0.0
 
 
 @dataclass

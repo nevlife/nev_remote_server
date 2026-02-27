@@ -1,145 +1,109 @@
-"""
-WebRTC video relay for NEV GCS.
-
-Flow:
-  Vehicle  ──WebSocket /ws/vehicle──▶  FrameBuffer
-  Browser  ──POST /api/webrtc/offer──▶  RTCPeerConnection (aiortc)
-                                               │ CameraVideoTrack
-                                               ▼
-                                        <video> element
-"""
 import asyncio
+import concurrent.futures
 import logging
-import threading
 
 import av
-import cv2
-import numpy as np
-from aiortc import RTCPeerConnection, RTCSessionDescription
-from aiortc.mediastreams import VideoStreamTrack
+from aiortc import VideoStreamTrack
+from av import VideoFrame
 
 logger = logging.getLogger(__name__)
 
-# ── Frame buffer ──────────────────────────────────────────────────────────────
 
-class FrameBuffer:
-    """Thread-safe store for the latest JPEG frame from the vehicle."""
+class WebRTCVideoTrack(VideoStreamTrack):
+    """WebRTC 피어 연결마다 생성되는 비디오 트랙.
+
+    broadcast_async()에서 디코딩된 VideoFrame을 받아 aiortc에 공급한다.
+    aiortc가 이 프레임을 H.264로 인코딩해서 브라우저로 전송한다.
+    """
+
+    kind = 'video'
 
     def __init__(self):
-        self._data: bytes | None = None
-        self._lock = threading.Lock()
-
-    def update(self, jpeg_bytes: bytes) -> None:
-        with self._lock:
-            self._data = jpeg_bytes
-
-    def get_latest(self) -> bytes | None:
-        with self._lock:
-            return self._data
-
-
-# ── aiortc video track ────────────────────────────────────────────────────────
-
-_BLANK_RGB = np.zeros((480, 640, 3), dtype=np.uint8)
-
-
-class CameraVideoTrack(VideoStreamTrack):
-    """Pulls JPEG frames from FrameBuffer and delivers them as WebRTC video."""
-
-    kind = "video"
-
-    def __init__(self, buffer: FrameBuffer):
         super().__init__()
-        self._buffer = buffer
-        self._last_jpeg: bytes | None = None
-        self._last_rgb:  np.ndarray | None = None
+        self._queue: asyncio.Queue[VideoFrame] = asyncio.Queue(maxsize=5)
 
-    async def recv(self) -> av.VideoFrame:
-        pts, time_base = await self.next_timestamp()
-
-        jpeg = self._buffer.get_latest()
-        rgb  = self._get_rgb(jpeg)
-
-        # av.VideoFrame은 매번 새로 생성 (pts 공유 방지)
-        frame = av.VideoFrame.from_ndarray(rgb, format="rgb24")
-        frame.pts = pts
-        frame.time_base = time_base
-        return frame
-
-    def _get_rgb(self, jpeg: bytes | None) -> np.ndarray:
-        if jpeg is None:
-            return _BLANK_RGB
-
-        # 같은 JPEG 객체면 디코딩 생략
-        if jpeg is self._last_jpeg and self._last_rgb is not None:
-            return self._last_rgb
-
-        arr = np.frombuffer(jpeg, dtype=np.uint8)
-        bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-        if bgr is not None:
-            self._last_rgb  = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-            self._last_jpeg = jpeg
-            return self._last_rgb
-
-        return _BLANK_RGB
-
-
-# ── Module-level state ────────────────────────────────────────────────────────
-
-frame_buffer = FrameBuffer()
-_pcs: set[RTCPeerConnection] = set()
-
-
-# ── Public API called by server.py ────────────────────────────────────────────
-
-async def handle_vehicle_frame(data: bytes) -> None:
-    """Receive a raw JPEG frame from the vehicle WebSocket."""
-    frame_buffer.update(data)
-
-
-async def handle_webrtc_offer(sdp: str, type_: str) -> dict:
-    """
-    Exchange SDP with the browser.
-
-    Browser sends an offer → we add a video track and return the answer.
-    ICE gathering completes before we return (up to 3 s timeout).
-    """
-    pc = RTCPeerConnection()
-    _pcs.add(pc)
-
-    @pc.on("connectionstatechange")
-    async def _on_state():
-        logger.info(f"WebRTC state: {pc.connectionState}")
-        if pc.connectionState in ("failed", "closed"):
-            _pcs.discard(pc)
-            await pc.close()
-
-    pc.addTrack(CameraVideoTrack(frame_buffer))
-
-    await pc.setRemoteDescription(RTCSessionDescription(sdp=sdp, type=type_))
-    answer = await pc.createAnswer()
-    await pc.setLocalDescription(answer)
-
-    # Wait for ICE candidates to be gathered
-    ice_done = asyncio.Event()
-
-    @pc.on("icegatheringstatechange")
-    def _on_ice():
-        if pc.iceGatheringState == "complete":
-            ice_done.set()
-
-    if pc.iceGatheringState != "complete":
+    def push_frame(self, frame: VideoFrame) -> None:
+        """이벤트 루프에서 호출 — QueueFull이면 가장 오래된 프레임 드롭."""
         try:
-            await asyncio.wait_for(ice_done.wait(), timeout=3.0)
-        except asyncio.TimeoutError:
-            logger.warning("ICE gathering timed out — returning partial candidates")
+            self._queue.put_nowait(frame)
+        except asyncio.QueueFull:
+            try:
+                self._queue.get_nowait()
+                self._queue.put_nowait(frame)
+            except Exception:
+                pass
 
-    logger.info(f"WebRTC offer handled, active peers: {len(_pcs)}")
-    return {"sdp": pc.localDescription.sdp, "type": pc.localDescription.type}
+    async def recv(self) -> VideoFrame:
+        """aiortc 내부에서 호출 — 다음 프레임 반환."""
+        frame = await self._queue.get()
+        pts, time_base = await self.next_timestamp()
+        out = frame.reformat(format='yuv420p')
+        out.pts = pts
+        out.time_base = time_base
+        return out
 
 
-async def cleanup() -> None:
-    """Close all active PeerConnections (call on shutdown)."""
-    for pc in list(_pcs):
-        await pc.close()
-    _pcs.clear()
+class VideoRelay:
+    """차량에서 수신한 H.265 NAL 유닛을 디코딩해 WebRTC 트랙들로 팬아웃."""
+
+    def __init__(self):
+        self._tracks: set[WebRTCVideoTrack] = set()
+        self._codec: av.CodecContext | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._executor: concurrent.futures.ThreadPoolExecutor | None = None
+
+    def init(self, loop: asyncio.AbstractEventLoop) -> None:
+        """서버 시작 시 한 번 호출."""
+        self._loop = loop
+        self._executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix='h265dec'
+        )
+        try:
+            self._codec = av.CodecContext.create('hevc', 'r')
+            logger.info('H.265 디코더 초기화 완료')
+        except Exception as e:
+            logger.error(f'H.265 디코더 초기화 실패: {e}')
+
+    # ── 트랙 관리 ──────────────────────────────────────────────────────────────
+
+    def create_track(self) -> WebRTCVideoTrack:
+        track = WebRTCVideoTrack()
+        self._tracks.add(track)
+        logger.info(f'WebRTC 트랙 생성 (활성: {len(self._tracks)})')
+        return track
+
+    def remove_track(self, track: WebRTCVideoTrack) -> None:
+        self._tracks.discard(track)
+        logger.info(f'WebRTC 트랙 제거 (활성: {len(self._tracks)})')
+
+    # ── 디코딩 + 팬아웃 ────────────────────────────────────────────────────────
+
+    def _decode_sync(self, data: bytes) -> list[VideoFrame]:
+        """executor 스레드에서 실행되는 동기 H.265 디코딩."""
+        if self._codec is None:
+            return []
+        try:
+            packet = av.Packet(data)
+            return self._codec.decode(packet)
+        except Exception as e:
+            logger.debug(f'H.265 디코딩 오류: {e}')
+            return []
+
+    async def broadcast_async(self, data: bytes) -> None:
+        """Zenoh 카메라 콜백에서 run_coroutine_threadsafe로 호출."""
+        if not data or not self._tracks or self._loop is None:
+            return
+        frames = await self._loop.run_in_executor(
+            self._executor, self._decode_sync, data
+        )
+        for frame in frames:
+            for track in list(self._tracks):
+                track.push_frame(frame)
+
+    async def cleanup(self) -> None:
+        self._tracks.clear()
+        if self._executor:
+            self._executor.shutdown(wait=False)
+
+
+video_relay = VideoRelay()

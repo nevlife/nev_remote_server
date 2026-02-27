@@ -7,7 +7,6 @@ Endpoints:
   POST /api/cmd_mode          → send mode change (browser fallback)
   POST /api/estop             → send e-stop (browser, always allowed)
   WS   /ws                    → real-time state push
-  WS   /ws/vehicle            → vehicle JPEG frame ingress
   POST /api/webrtc/offer      → WebRTC SDP offer/answer
 """
 import asyncio
@@ -19,12 +18,16 @@ from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from aiortc import RTCPeerConnection, RTCSessionDescription
 
-from . import video_relay
+from .video_relay import video_relay
 
 logger = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).parent / 'static'
+
+# 활성 PeerConnection 추적 (shutdown 시 정리용)
+_pcs: set[RTCPeerConnection] = set()
 
 
 def create_app(state, proto):
@@ -58,7 +61,6 @@ def create_app(state, proto):
     async def set_cmd_mode(req: CmdModeReq):
         if req.mode not in (-1, 0, 1, 2):
             return {'ok': False, 'error': f'invalid mode: {req.mode}'}
-        # 스테이션 미연결 시 브라우저에서 직접 전송 가능
         state.control.mode = req.mode
         proto.send_cmd_mode(req.mode)
         logger.info(f'Mode → {req.mode} (browser)')
@@ -66,7 +68,6 @@ def create_app(state, proto):
 
     @app.post('/api/estop')
     async def set_estop(req: EStopReq):
-        # E-Stop은 스테이션 연결 여부와 무관하게 항상 허용 (안전)
         state.control.estop = req.active
         proto.send_estop(req.active)
         logger.info(f'E-stop → {req.active} (browser)')
@@ -98,31 +99,39 @@ def create_app(state, proto):
             logger.info(f'Browser WebSocket disconnected: {ws.client}')
 
     # ------------------------------------------------------------------
-    # WebSocket — 차량 영상 수신
-    # ------------------------------------------------------------------
-
-    @app.websocket('/ws/vehicle')
-    async def vehicle_video_ws(ws: WebSocket):
-        await ws.accept()
-        logger.info(f'Vehicle video WebSocket connected: {ws.client}')
-        try:
-            while True:
-                data = await ws.receive_bytes()
-                await video_relay.handle_vehicle_frame(data)
-        except WebSocketDisconnect:
-            pass
-        except Exception as exc:
-            logger.warning(f'Vehicle video WebSocket error: {exc}')
-        finally:
-            logger.info(f'Vehicle video WebSocket disconnected: {ws.client}')
-
-    # ------------------------------------------------------------------
-    # WebRTC — 브라우저 영상 스트리밍
+    # WebRTC — H.265 디코딩 후 H.264로 브라우저에 전달
     # ------------------------------------------------------------------
 
     @app.post('/api/webrtc/offer')
     async def webrtc_offer(request: Request):
         params = await request.json()
-        return await video_relay.handle_webrtc_offer(params['sdp'], params['type'])
+        offer = RTCSessionDescription(sdp=params['sdp'], type=params['type'])
+
+        pc = RTCPeerConnection()
+        _pcs.add(pc)
+
+        track = video_relay.create_track()
+        pc.addTrack(track)
+
+        @pc.on('connectionstatechange')
+        async def on_connectionstatechange():
+            logger.info(f'WebRTC [{pc.connectionState}]')
+            if pc.connectionState in ('failed', 'closed', 'disconnected'):
+                video_relay.remove_track(track)
+                _pcs.discard(pc)
+                await pc.close()
+
+        await pc.setRemoteDescription(offer)
+        answer = await pc.createAnswer()
+        await pc.setLocalDescription(answer)
+
+        return {'sdp': pc.localDescription.sdp, 'type': pc.localDescription.type}
 
     return app
+
+
+async def shutdown_webrtc() -> None:
+    """서버 종료 시 모든 WebRTC 연결 정리."""
+    for pc in list(_pcs):
+        await pc.close()
+    _pcs.clear()
