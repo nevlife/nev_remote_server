@@ -70,7 +70,7 @@ def create_app(state, proto):
             pass
         finally:
             state.remove_subscriber(queue)
-                logger.info(f'Browser WebSocket disconnected: {ws.client}')
+            logger.info(f'Browser WebSocket disconnected: {ws.client}')
 
     @app.websocket('/ws/video')
     async def ws_video(ws: WebSocket):
