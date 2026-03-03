@@ -1,16 +1,16 @@
 import json
 import time
 import dataclasses
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List
 
-# 차량 연결 판단에 쓰이는 핵심 제어 데이터 키
+# Key control data used to determine vehicle connectivity
 _CONTROL_KEYS = frozenset({'mux', 'twist', 'network', 'hunter', 'estop'})
 
 @dataclass
 class MuxStatus:
-    requested_mode: int = -1      # -1:idle 0:ctrl 1:nav 2:remote
-    active_source:  int = -1      # 0:nav 1:teleop -1:none
+    requested_mode: int = -1      # -1: idle 0: ctrl 1: nav 2: remote
+    active_source:  int = -1      # 0: nav 1: teleop -1: none
     remote_enabled: bool = False
     nav_active:     bool = False
     teleop_active:  bool = False
@@ -29,11 +29,16 @@ class TwistValues:
 
 @dataclass
 class NetworkStatus:
-    connected:         bool  = False
-    status_code:       int   = 2     # 0:ok 1:hb_delay 2:socket_err
-    rtt_ms:            float = 0.0
-    bw_camera_mbps:    float = 0.0
-    bw_telemetry_mbps: float = 0.0
+    connected:           bool  = False
+    status_code:         int   = 2     # 0: ok 1: hb_delay 2: socket_err
+    ht_rtt:              float = 0.0
+    bw_video_rx:         float = 0.0
+    bw_telemetry:        float = 0.0
+    bw_video_tx:         float = 0.0   # Vehicle video TX (Mbps)
+    encode_delay:        float = 0.0   # GStreamer encode latency (ms)
+    video_net_delay:     float = 0.0   # Video one-way network latency (ms)
+    decode_delay:        float = 0.0   # Server H.265→JPEG processing latency (ms)
+    tele_delay_ms:       float = 0.0   # Telemetry one-way latency (ms)
 
 
 @dataclass
@@ -49,14 +54,12 @@ class HunterStatus:
 @dataclass
 class EStopStatus:
     is_estop:    bool = False
-    bridge_flag: int  = 0   # 0:ok 1:server_cmd 2:socket 3:hb_timeout 4:ctrl_timeout
-    mux_flag:    int  = 0   # 0:ok 1:remote+nav+no_teleop
+    bridge_flag: int  = 0   # 0: ok 1: server_cmd 2: socket 3: hb_timeout 4: ctrl_timeout
+    mux_flag:    int  = 0   # 0: ok 1: remote+nav+no_teleop
 
 
 @dataclass
 class SystemResources:
-    cpu_phys:          int   = 0
-    cpu_logic:         int   = 0
     cpu_usage:         float = 0.0
     cpu_temp:          float = 0.0
     cpu_load:          float = 0.0
@@ -72,11 +75,11 @@ class ControlState:
     mode:               int   = -1
     estop:              bool  = False
     linear_x:           float = 0.0
-    steer_angle_deg:    float = 0.0   # 조향각 (deg) — nev_gcs 원본값
-    angular_z:          float = 0.0   # 각속도 (rad/s) — 서버 계산값
+    steer_angle_deg:    float = 0.0   # Steering angle (deg) — from nev_gcs
+    angular_z:          float = 0.0   # Angular velocity (rad/s) — computed by server
     raw_speed:          float = 0.0
     raw_steer:          float = 0.0
-    joystick_connected: bool  = False  # 스테이션 조이스틱 연결 상태
+    joystick_connected: bool  = False  # Station joystick connection state
 
 
 @dataclass
@@ -97,10 +100,10 @@ class SharedState:
         self.control   = ControlState()
         self.alerts: List[Alert] = []
 
-        self.last_vehicle_recv: float = 0.0   # 모든 차량 데이터 (연결 모니터링)
-        self.last_control_recv: float = 0.0   # 핵심 제어 데이터만 (mux/twist/hunter/estop)
+        self.last_vehicle_recv: float = 0.0   # All vehicle data (connectivity monitoring)
+        self.last_control_recv: float = 0.0   # Control data only (mux/twist/hunter/estop)
 
-        # 스테이션 연결 상태
+        # Station connection state
         self.station_connected: bool  = False
         self.station_last_recv: float = 0.0
 

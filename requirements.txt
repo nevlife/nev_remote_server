@@ -2,7 +2,6 @@ zenoh
 fastapi
 uvicorn[standard]
 pyyaml
-aiortc
 opencv-python
 numpy
 av

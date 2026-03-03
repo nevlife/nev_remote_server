@@ -39,23 +39,18 @@ function textCls(val, warnAt, errorAt) {
   return '';
 }
 
-// ──────────────────────────────────────────────────────
-
 class CommandCenter {
   constructor() {
     this.ws    = null;
     this.state = null;
     this._reconnectTimer  = null;
-    this._pc              = null;
+    this._videoWs         = null;
     this._videoRetryTimer = null;
     this._bindUI();
     this._startClock();
     this._connect();
     this._startVideo();
   }
-
-
-  // ── WebSocket ──────────────────────────────────────
 
   _connect() {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -75,8 +70,6 @@ class CommandCenter {
     };
     this.ws.onerror = () => this.ws.close();
   }
-
-  // ── UI bindings ────────────────────────────────────
 
   _bindUI() {
     document.querySelectorAll('.mode-btn').forEach(btn =>
@@ -101,8 +94,6 @@ class CommandCenter {
     } catch (e) { console.error(url, e); }
   }
 
-  // ── Master render ──────────────────────────────────
-
   _render(s) {
     this._renderHeader(s);
     this._renderHunter(s.hunter);
@@ -117,35 +108,26 @@ class CommandCenter {
     this._renderAlerts(s.alerts);
   }
 
-  // ── Header ────────────────────────────────────────
-
   _renderHeader(s) {
-    // VEH badge
     const veh = $('badge-veh');
     if      (s.vehicle_age < 0) { veh.textContent = 'VEH';                              veh.className = 'badge'; }
     else if (s.vehicle_age < 2) { veh.textContent = 'VEH';                              veh.className = 'badge ok'; }
     else                        { veh.textContent = `VEH ${s.vehicle_age.toFixed(0)}s`; veh.className = 'badge error'; }
 
-    // STAS badge (스테이션 연결)
     const stas = $('badge-stas');
     stas.textContent = 'STAS';
     stas.className   = 'badge ' + (s.station_connected ? 'ok' : 'error');
 
-    // JOY badge (조이스틱 연결)
     const joy = $('badge-joy');
     joy.textContent = 'JOY';
     joy.className   = 'badge ' + (s.control?.joystick_connected ? 'ok' : '');
 
-    // REM badge
     const rem = $('badge-rem');
     rem.textContent = 'REM';
     rem.className   = 'badge ' + (s.remote_enabled ? 'ok' : '');
 
-    $('rtt-disp').textContent = `RTT ${s.network.rtt_ms.toFixed(1)}ms`;
-
     document.querySelectorAll('.mode-btn').forEach(btn => {
       btn.classList.toggle('active', parseInt(btn.dataset.mode) === s.mux.requested_mode);
-      // 스테이션 미연결 시 시각적 dim 처리
       btn.classList.toggle('station-offline', !s.station_connected);
     });
 
@@ -153,8 +135,6 @@ class CommandCenter {
     eb.innerHTML = s.control.estop ? '&#9632; RELEASE' : '&#9632; E-STOP';
     eb.classList.toggle('triggered', s.control.estop || s.estop.is_estop);
   }
-
-  // ── Hunter ────────────────────────────────────────
 
   _renderHunter(hs) {
     const steerDeg = (hs.steering_angle * 180 / Math.PI).toFixed(1);
@@ -171,8 +151,6 @@ class CommandCenter {
       kv('bat',   `${hs.battery_voltage.toFixed(2)} V`, batCls);
   }
 
-  // ── Mux ───────────────────────────────────────────
-
   _renderMux(mx) {
     const modeCls = mx.requested_mode === 2 ? 'blue' : mx.requested_mode === -1 ? 'muted' : '';
 
@@ -185,21 +163,27 @@ class CommandCenter {
       kv('final',  dot(mx.final_active)  + (mx.final_active  ? 'ON'  : 'OFF'));
   }
 
-  // ── Network ───────────────────────────────────────
-
   _renderNetwork(ns) {
     const stCls  = ns.connected ? 'green' : 'red';
-    const rttCls = textCls(ns.rtt_ms, 50, 100);
+    const rttCls = textCls(ns.ht_rtt, 50, 100);
+
+    const estTotal = (ns.encode_delay ?? 0) + (ns.video_net_delay ?? 0) + (ns.decode_delay ?? 0);
 
     $('network-body').innerHTML =
-      kv('status', dot(ns.connected, ns.connected ? 'green' : 'red') +
-                   (NS_CODES[ns.status_code] ?? ns.status_code), stCls) +
-      kv('rtt',    `${ns.rtt_ms.toFixed(1)} ms`, rttCls) +
-      kv('bw cam', ns.bw_camera_mbps    > 0 ? `${ns.bw_camera_mbps.toFixed(2)} Mbps`    : '—') +
-      kv('bw tele', ns.bw_telemetry_mbps > 0 ? `${ns.bw_telemetry_mbps.toFixed(2)} Mbps` : '—');
+      kv('status',    dot(ns.connected, ns.connected ? 'green' : 'red') +
+                      (NS_CODES[ns.status_code] ?? ns.status_code), stCls) +
+      kv('video tx',  ns.bw_video_tx  > 0 ? `${ns.bw_video_tx.toFixed(2)} Mbps`  : '—') +
+      kv('video rx',  ns.bw_video_rx  > 0 ? `${ns.bw_video_rx.toFixed(2)} Mbps`  : '—') +
+      kv('tele rx',   ns.bw_telemetry > 0 ? `${ns.bw_telemetry.toFixed(2)} Mbps` : '—') +
+      '<div class="kv"><span class="k">─────</span><span class="v"></span></div>' +
+      kv('enc delay',   ns.encode_delay    > 0 ? `${ns.encode_delay.toFixed(1)} ms`    : '—') +
+      kv('net delay',   ns.video_net_delay > 0 ? `${ns.video_net_delay.toFixed(1)} ms` : '—') +
+      kv('dec delay',   ns.decode_delay    > 0 ? `${ns.decode_delay.toFixed(1)} ms`    : '—') +
+      kv('total delay', estTotal           > 0 ? `${estTotal.toFixed(1)} ms`            : '—') +
+      '<div class="kv"><span class="k">─────</span><span class="v"></span></div>' +
+      kv('tele delay', ns.tele_delay_ms > 0 ? `${ns.tele_delay_ms.toFixed(1)} ms` : '—') +
+      kv('rtt',        `${ns.ht_rtt.toFixed(1)} ms`, rttCls);
   }
-
-  // ── Twist ─────────────────────────────────────────
 
   _renderTwist(tv) {
     const row = (lx, az) => `${sgn(lx)} m/s / ${sgn(az)} rad/s`;
@@ -209,8 +193,6 @@ class CommandCenter {
       kv('teleop', row(tv.teleop_lx, tv.teleop_az)) +
       kv('final',  row(tv.final_lx,  tv.final_az));
   }
-
-  // ── E-Stop ────────────────────────────────────────
 
   _renderEstop(es, ctrl) {
     const active = es.is_estop || ctrl.estop;
@@ -226,8 +208,6 @@ class CommandCenter {
       kv('mux',    MUX_FLAGS[es.mux_flag]   ?? es.mux_flag,   es.mux_flag   !== 0 ? 'yellow' : '');
   }
 
-  // ── Joystick ──────────────────────────────────────
-
   _renderJoy(ctrl, stationConnected) {
     const joyCls  = ctrl.joystick_connected ? 'green' : 'red';
     const stasCls = stationConnected ? 'green' : 'red';
@@ -240,8 +220,6 @@ class CommandCenter {
       kv('raw',      `${ctrl.raw_speed.toFixed(3)} / ${ctrl.raw_steer.toFixed(3)}`) +
       kv('cmd',      `${ctrl.linear_x.toFixed(3)} m/s / ${ctrl.steer_angle_deg.toFixed(1)} deg / ${ctrl.angular_z.toFixed(4)} rad/s`);
   }
-
-  // ── Resources ─────────────────────────────────────
 
   _renderResources(r, gpuList) {
     let html = '';
@@ -282,8 +260,6 @@ class CommandCenter {
     $('res-body').innerHTML = html;
   }
 
-  // ── Disk ──────────────────────────────────────────
-
   _renderDisk(partitions) {
     if (!partitions || partitions.length === 0) {
       $('disk-body').innerHTML = '<span class="muted">no data</span>';
@@ -301,8 +277,6 @@ class CommandCenter {
       })
       .join('');
   }
-
-  // ── Net interfaces ────────────────────────────────
 
   _renderNetIfaces(ifaces, resources) {
     if (!ifaces || ifaces.length === 0) {
@@ -328,8 +302,6 @@ class CommandCenter {
     $('netifaces-body').innerHTML = html;
   }
 
-  // ── Alerts ────────────────────────────────────────
-
   _renderAlerts(alerts) {
     if (!alerts || alerts.length === 0) {
       $('alerts-body').innerHTML = '<span class="muted">—</span>';
@@ -340,63 +312,42 @@ class CommandCenter {
       .join('');
   }
 
-  // ── H.265 → 서버 디코딩 → WebRTC → <video> ──────
-
   _startVideo() {
     clearTimeout(this._videoRetryTimer);
 
-    // 기존 PeerConnection 정리
-    if (this._pc) {
-      this._pc.onconnectionstatechange = null;
-      this._pc.close();
-      this._pc = null;
+    if (this._videoWs) {
+      this._videoWs.onclose = null;
+      this._videoWs.close();
+      this._videoWs = null;
     }
 
-    const videoEl  = $('video-el');
+    const imgEl    = $('video-el');
     const statusEl = $('video-status');
 
-    const pc = new RTCPeerConnection({
-      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
-    });
-    this._pc = pc;
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const ws    = new WebSocket(`${proto}//${location.host}/ws/video`);
+    this._videoWs = ws;
 
-    pc.ontrack = (event) => {
-      videoEl.srcObject = event.streams[0];
-      videoEl.style.display = 'block';
+    ws.binaryType = 'blob';
+
+    ws.onmessage = (e) => {
+      const url = URL.createObjectURL(e.data);
+      imgEl.onload = () => URL.revokeObjectURL(url);
+      imgEl.src = url;
+      imgEl.style.display = 'block';
       $('video-placeholder').style.display = 'none';
       statusEl.textContent = 'LIVE';
     };
 
-    pc.onconnectionstatechange = () => {
-      console.log('[WebRTC]', pc.connectionState);
-      if (['failed', 'closed', 'disconnected'].includes(pc.connectionState)) {
-        videoEl.style.display = 'none';
-        $('video-placeholder').style.display = '';
-        statusEl.textContent = `VIDEO ${pc.connectionState.toUpperCase()}`;
-        this._videoRetryTimer = setTimeout(() => this._startVideo(), 3000);
-      }
+    ws.onclose = () => {
+      imgEl.style.display = 'none';
+      $('video-placeholder').style.display = '';
+      statusEl.textContent = 'NO SIGNAL';
+      this._videoRetryTimer = setTimeout(() => this._startVideo(), 3000);
     };
 
-    // 수신 전용 비디오 트랜시버 추가
-    pc.addTransceiver('video', { direction: 'recvonly' });
-
-    pc.createOffer()
-      .then(offer => pc.setLocalDescription(offer))
-      .then(() => fetch('/api/webrtc/offer', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ sdp: pc.localDescription.sdp, type: pc.localDescription.type }),
-      }))
-      .then(r => r.json())
-      .then(answer => pc.setRemoteDescription(new RTCSessionDescription(answer)))
-      .catch(err => {
-        console.error('[WebRTC] offer 실패:', err);
-        statusEl.textContent = 'VIDEO ERROR';
-        this._videoRetryTimer = setTimeout(() => this._startVideo(), 3000);
-      });
+    ws.onerror = () => ws.close();
   }
-
-  // ── Clock ─────────────────────────────────────────
 
   _startClock() {
     const tick = () => { $('clock').textContent = new Date().toTimeString().slice(0, 8); };

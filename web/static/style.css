@@ -28,7 +28,6 @@ body {
   overflow: hidden;
 }
 
-/* ── Topbar ─────────────────────────────────────── */
 #topbar {
   height: var(--topbar-h);
   display: flex;
@@ -63,10 +62,8 @@ body {
 .badge.warn  { color: var(--yellow); border-color: var(--yellow); }
 .badge.error { color: var(--red);    border-color: var(--red); }
 
-#rtt-disp,
 #clock { font-size: 11px; color: var(--muted); }
 
-/* ── Cmdbar ─────────────────────────────────────── */
 #cmdbar {
   height: var(--cmdbar-h);
   display: flex;
@@ -118,14 +115,12 @@ button.station-offline { opacity: 0.4; }
   50%       { opacity: 0.65; }
 }
 
-/* ── Main ───────────────────────────────────────── */
 #main {
   display: flex;
   flex: 1;
   overflow: hidden;
 }
 
-/* ── Video panel ────────────────────────────────── */
 #video-panel {
   flex: 1;
   min-width: 0;
@@ -155,7 +150,6 @@ button.station-offline { opacity: 0.4; }
   letter-spacing: 8px;
 }
 
-/* ── Side panel ─────────────────────────────────── */
 #side-panel {
   width: var(--side-w);
   flex-shrink: 0;
@@ -171,7 +165,6 @@ button.station-offline { opacity: 0.4; }
 #side-panel::-webkit-scrollbar-track { background: transparent; }
 #side-panel::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
 
-/* ── Cards ──────────────────────────────────────── */
 .card {
   background: var(--bg-card);
   padding: 8px 10px;
@@ -189,7 +182,6 @@ button.station-offline { opacity: 0.4; }
   border-left: 2px solid var(--red);
 }
 
-/* ── Key-value rows ─────────────────────────────── */
 .kv {
   display: flex;
   justify-content: space-between;
@@ -205,7 +197,6 @@ button.station-offline { opacity: 0.4; }
 .v.blue   { color: var(--blue); }
 .muted    { color: var(--muted); }
 
-/* ── Progress bar ───────────────────────────────── */
 .bar-wrap {
   width: 100%;
   height: 3px;
@@ -223,7 +214,6 @@ button.station-offline { opacity: 0.4; }
 .bar-fill.warn  { background: var(--yellow); }
 .bar-fill.error { background: var(--red); }
 
-/* ── Dot indicator ──────────────────────────────── */
 .dot {
   display: inline-block;
   width: 7px; height: 7px;
@@ -237,7 +227,6 @@ button.station-offline { opacity: 0.4; }
 .dot.red    { background: var(--red); box-shadow: 0 0 5px var(--red); }
 .dot.yellow { background: var(--yellow); }
 
-/* ── Alerts ─────────────────────────────────────── */
 .alert-item { padding: 2px 0; line-height: 1.6; }
 .alert-warn  { color: var(--yellow); }
 .alert-error { color: var(--red); font-weight: bold; }

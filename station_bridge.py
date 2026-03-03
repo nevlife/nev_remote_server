@@ -1,15 +1,3 @@
-"""
-Station bridge (서버 측).
-
-nev/station/* 구독 → 스테이션 연결 추적 + nev/gcs/* 중계 → 차량
-
-토픽:
-  nev/station/heartbeat         ← 스테이션 keepalive (5 Hz)
-  nev/station/teleop            ← 조이스틱 명령  → nev/gcs/teleop
-  nev/station/estop             ← E-Stop 버튼   → nev/gcs/estop
-  nev/station/cmd_mode          ← 모드 변경      → nev/gcs/cmd_mode
-  nev/station/joystick_connected ← 조이스틱 연결 여부
-"""
 import asyncio
 import json
 import logging
@@ -18,35 +6,27 @@ import time
 
 logger = logging.getLogger(__name__)
 
-
 class StationBridge:
-    def __init__(self, state, loop: asyncio.AbstractEventLoop, vehicle_proto, cfg: dict = None):
+    def __init__(self, state, loop: asyncio.AbstractEventLoop, vehicle_proto, cfg: dict = None): # type: ignore
         self._state        = state
         self._loop         = loop
         self._proto        = vehicle_proto
         self._subs: list   = []
-        self._wheelbase    = (cfg or {}).get('wheelbase', 0.650)  # m — Hunter V2
+        self._wheelbase    = (cfg or {}).get('wheelbase', 0.650)
 
     def start(self, session) -> None:
         self._subs = [
-            session.declare_subscriber('nev/station/heartbeat',
-                                       self._on_heartbeat),
-            session.declare_subscriber('nev/station/teleop',
-                                       self._on_teleop),
-            session.declare_subscriber('nev/station/estop',
-                                       self._on_estop),
-            session.declare_subscriber('nev/station/cmd_mode',
-                                       self._on_cmd_mode),
-            session.declare_subscriber('nev/station/joystick_connected',
-                                       self._on_joystick_connected),
+            session.declare_subscriber('nev/station/heartbeat',         self._on_heartbeat),
+            session.declare_subscriber('nev/station/teleop',            self._on_teleop),
+            session.declare_subscriber('nev/station/estop',             self._on_estop),
+            session.declare_subscriber('nev/station/cmd_mode',          self._on_cmd_mode),
+            session.declare_subscriber('nev/station/joystick_connected',self._on_joystick_connected),
         ]
         logger.info('StationBridge started')
 
     def stop(self) -> None:
         for sub in self._subs:
             sub.undeclare()
-
-    # ── Zenoh callbacks (zenoh background thread) ─────────────────────────────
 
     def _on_heartbeat(self, sample):
         self._loop.call_soon_threadsafe(self._recv_heartbeat)
@@ -60,11 +40,10 @@ class StationBridge:
         try:
             data = json.loads(bytes(sample.payload))
             if self._state.station_connected:
-                lx    = float(data.get('linear_x',    0.0))
-                steer = float(data.get('steer_angle',  0.0))  # rad
+                lx    = float(data.get('linear_x',     0.0))
+                steer = float(data.get('steer_angle',  0.0))
                 rs    = float(data.get('raw_speed',    0.0))
                 rt    = float(data.get('raw_steer',    0.0))
-                # angular_z 계산: 정지 시 조향각 그대로, 주행 시 bicycle kinematics
                 if abs(steer) < 1e-6:
                     az = 0.0
                 elif abs(lx) < 0.05:
@@ -107,15 +86,13 @@ class StationBridge:
         except Exception as e:
             logger.warning(f'station joystick_connected parse error: {e}')
 
-    # ── asyncio thread state updates ──────────────────────────────────────────
-
     def _update_control(self, lx: float, az: float, steer_deg: float = 0.0,
                         rs: float = 0.0, rt: float = 0.0):
-        self._state.control.linear_x       = lx
-        self._state.control.angular_z      = az
+        self._state.control.linear_x        = lx
+        self._state.control.angular_z       = az
         self._state.control.steer_angle_deg = steer_deg
-        self._state.control.raw_speed      = rs
-        self._state.control.raw_steer      = rt
+        self._state.control.raw_speed       = rs
+        self._state.control.raw_steer       = rt
         self._state._broadcast_sync()
 
     def _update_estop(self, active: bool):

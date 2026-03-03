@@ -1,14 +1,3 @@
-"""
-FastAPI web server for NEV Remote Server.
-
-Endpoints:
-  GET  /                      → index.html
-  GET  /api/state             → current state snapshot (JSON)
-  POST /api/cmd_mode          → send mode change (browser fallback)
-  POST /api/estop             → send e-stop (browser, always allowed)
-  WS   /ws                    → real-time state push
-  POST /api/webrtc/offer      → WebRTC SDP offer/answer
-"""
 import asyncio
 import json
 import logging
@@ -18,16 +7,19 @@ from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from aiortc import RTCPeerConnection, RTCSessionDescription
 
 from .video_relay import video_relay
+
+
+class CmdModeReq(BaseModel):
+    mode: int
+
+class EStopReq(BaseModel):
+    active: bool
 
 logger = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).parent / 'static'
-
-# 활성 PeerConnection 추적 (shutdown 시 정리용)
-_pcs: set[RTCPeerConnection] = set()
 
 
 def create_app(state, proto):
@@ -35,23 +27,9 @@ def create_app(state, proto):
 
     app.mount('/static', StaticFiles(directory=str(STATIC_DIR)), name='static')
 
-    # ------------------------------------------------------------------
-    # Pages
-    # ------------------------------------------------------------------
-
     @app.get('/', response_class=HTMLResponse)
     async def index():
         return (STATIC_DIR / 'index.html').read_text()
-
-    # ------------------------------------------------------------------
-    # REST
-    # ------------------------------------------------------------------
-
-    class CmdModeReq(BaseModel):
-        mode: int
-
-    class EStopReq(BaseModel):
-        active: bool
 
     @app.get('/api/state')
     async def get_state():
@@ -73,10 +51,6 @@ def create_app(state, proto):
         logger.info(f'E-stop → {req.active} (browser)')
         return {'ok': True, 'active': req.active}
 
-    # ------------------------------------------------------------------
-    # WebSocket — 브라우저 상태 스트림
-    # ------------------------------------------------------------------
-
     @app.websocket('/ws')
     async def ws_endpoint(ws: WebSocket):
         await ws.accept()
@@ -96,42 +70,26 @@ def create_app(state, proto):
             pass
         finally:
             state.remove_subscriber(queue)
-            logger.info(f'Browser WebSocket disconnected: {ws.client}')
+                logger.info(f'Browser WebSocket disconnected: {ws.client}')
 
-    # ------------------------------------------------------------------
-    # WebRTC — H.265 디코딩 후 H.264로 브라우저에 전달
-    # ------------------------------------------------------------------
+    @app.websocket('/ws/video')
+    async def ws_video(ws: WebSocket):
+        await ws.accept()
+        queue: asyncio.Queue = asyncio.Queue(maxsize=5)
+        video_relay.add_subscriber(queue)
+        logger.info(f'Video WebSocket connected: {ws.client}')
 
-    @app.post('/api/webrtc/offer')
-    async def webrtc_offer(request: Request):
-        params = await request.json()
-        offer = RTCSessionDescription(sdp=params['sdp'], type=params['type'])
-
-        pc = RTCPeerConnection()
-        _pcs.add(pc)
-
-        track = video_relay.create_track()
-        pc.addTrack(track)
-
-        @pc.on('connectionstatechange')
-        async def on_connectionstatechange():
-            logger.info(f'WebRTC [{pc.connectionState}]')
-            if pc.connectionState in ('failed', 'closed', 'disconnected'):
-                video_relay.remove_track(track)
-                _pcs.discard(pc)
-                await pc.close()
-
-        await pc.setRemoteDescription(offer)
-        answer = await pc.createAnswer()
-        await pc.setLocalDescription(answer)
-
-        return {'sdp': pc.localDescription.sdp, 'type': pc.localDescription.type}
+        try:
+            while True:
+                try:
+                    jpeg = await asyncio.wait_for(queue.get(), timeout=10.0)
+                    await ws.send_bytes(jpeg)
+                except asyncio.TimeoutError:
+                    continue
+        except (WebSocketDisconnect, Exception):
+            pass
+        finally:
+            video_relay.remove_subscriber(queue)
+            logger.info(f'Video WebSocket disconnected: {ws.client}')
 
     return app
-
-
-async def shutdown_webrtc() -> None:
-    """서버 종료 시 모든 WebRTC 연결 정리."""
-    for pc in list(_pcs):
-        await pc.close()
-    _pcs.clear()
